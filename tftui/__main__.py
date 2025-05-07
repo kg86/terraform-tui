@@ -49,6 +49,7 @@ class ApplicationGlobals:
     no_init = False
     darkmode = True
     var_file = None
+    state_file = None
 
 
 class AppHeader(Horizontal):
@@ -104,7 +105,9 @@ class StateTree(Tree):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.current_state = State(
-            executable=ApplicationGlobals.executable, no_init=ApplicationGlobals.no_init
+            executable=ApplicationGlobals.executable,
+            no_init=ApplicationGlobals.no_init,
+            state_file=ApplicationGlobals.state_file,
         )
         self.guide_depth = 3
         self.root.data = ""
@@ -723,6 +726,11 @@ def parse_command_line() -> None:
     parser.add_argument(
         "-v", "--version", help="show version information", action="store_true"
     )
+    parser.add_argument(
+        "-s",
+        "--state-file",
+        help="path to terraform show output file (if specified, use file content instead of running terraform show)",
+    )
     args = parser.parse_args()
 
     if args.offline or args.disable_usage_tracking:
@@ -738,8 +746,9 @@ def parse_command_line() -> None:
         ApplicationGlobals.executable = args.executable
     if args.var_file:
         ApplicationGlobals.var_file = args.var_file
+    if args.state_file:
+        ApplicationGlobals.state_file = args.state_file
     if args.generate_debug_log:
-        logger = setup_logging("debug")
         logger.debug("*" * 50)
         logger.debug(f"Debug log enabled (tftui v{OutboundAPIs.version})")
     ApplicationGlobals.darkmode = not args.light_mode

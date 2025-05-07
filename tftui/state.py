@@ -8,7 +8,7 @@ from tftui.debug_log import setup_logging
 logger = setup_logging()
 
 
-async def execute_async(*command: str) -> tuple[str, str]:
+async def execute_async(*command: str) -> tuple[int, str]:
     command = [word for phrase in command for word in phrase.split()]
 
     proc = await asyncio.create_subprocess_exec(
@@ -23,7 +23,7 @@ async def execute_async(*command: str) -> tuple[str, str]:
         "Executed command: %s",
         json.dumps({"command": command, "return_code": proc.returncode}, indent=2),
     )
-    return (proc.returncode, response)
+    return (proc.returncode if proc.returncode is not None else 1, response)
 
 
 def extract_sensitive_values(stateTree: dict) -> dict[str, dict[str, str]]:
@@ -35,12 +35,10 @@ def extract_sensitive_values(stateTree: dict) -> dict[str, dict[str, str]]:
         ):
             sensitive_keys = stateTree.get("sensitive_values")
             if sensitive_keys:
-                secrets = {
-                    k: v
-                    for k, v in stateTree.get("values").items()
-                    if k in sensitive_keys
-                }
-                sensitive_values[stateTree.get("address")] = secrets
+                values = stateTree.get("values")
+                if values:
+                    secrets = {k: v for k, v in values.items() if k in sensitive_keys}
+                    sensitive_values[stateTree.get("address")] = secrets
         for value in stateTree.values():
             sensitive_values.update(extract_sensitive_values(value))
     elif isinstance(stateTree, list):
@@ -50,7 +48,6 @@ def extract_sensitive_values(stateTree: dict) -> dict[str, dict[str, str]]:
 
 
 def split_resource_name(fullname: str) -> list[str]:
-    # Thanks Chatgpt, couldn't do this without you; please don't become sentient and kill us all
     pattern = r"\.(?=(?:[^\[\]]*\[[^\[\]]*\])*[^\[\]]*$)"
     return re.split(pattern, fullname)
 
@@ -76,12 +73,15 @@ class State:
     state_tree = {}
     executable = ""
     no_init = False
+    state_file = None
 
-    def __init__(self, executable="terraform", no_init=False):
+    def __init__(self, executable="terraform", no_init=False, state_file=None):
         self.executable = executable
         self.no_init = no_init
+        self.state_file = state_file
 
-    def parse_block(line: str) -> tuple[str, str, str]:
+    @staticmethod
+    def parse_block(line: str) -> tuple[str, str, str, str, bool]:
         fullname = line[2 : line.rindex(":")]
         is_tainted = line.endswith("(tainted)")
         parts = split_resource_name(fullname)
@@ -97,9 +97,16 @@ class State:
         return (fullname, name, submodule, type, is_tainted)
 
     async def refresh_state(self) -> None:
-        returncode, stdout = await execute_async(self.executable, "show -no-color")
-        if returncode != 0:
-            raise Exception(stdout)
+        logger.critical(f"state loaded from file: {self.state_file}")
+        if self.state_file:
+            with open(self.state_file, "r", encoding="utf-8") as f:
+                stdout = f.read()
+            logger.debug(f"state loaded from file: {self.state_file}")
+            print("using cached state")
+        else:
+            returncode, stdout = await execute_async(self.executable, "show -no-color")
+            if returncode != 0:
+                raise Exception(stdout)
 
         self.state_tree = {}
         state_output = stdout.splitlines()
@@ -108,7 +115,7 @@ class State:
         contents = ""
         for line in state_output:
             if line.startswith("#"):
-                (fullname, name, submodule, type, is_tainted) = State.parse_block(line)
+                (fullname, name, submodule, type, is_tainted) = self.parse_block(line)
                 contents = ""
             elif line.startswith("}"):
                 contents += line.rstrip() + "\n"
